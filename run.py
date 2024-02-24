@@ -12,7 +12,7 @@ from pytorch_lightning.loggers import WandbLogger
 import wandb
 
 from trainers.pretrain import pretrain
-from trainers.evaluate import evaluate
+from trainers.evaluate import evaluate_private_dataset, evaluate_tufts_dataset
 from trainers.test import test
 from trainers.generate_embeddings import generate_embeddings
 from utils.utils import grab_arg_from_checkpoint, prepend_paths, re_prepend_paths
@@ -24,52 +24,36 @@ torch.backends.cudnn.benchmark = False
 #@hydra.main(config_path='./configs', config_name='config', version_base=None)
 def run(args: DictConfig):
   pl.seed_everything(args.seed)
-  args = prepend_paths(args)
-  time.sleep(random.randint(1,5)) # Prevents multiple runs getting the same version when launching many jobs at once
-
-  if args.resume_training:
-    if args.wandb_id:
-      wandb_id = args.wandb_id
-    checkpoint = args.checkpoint
-    ckpt = torch.load(args.checkpoint)
-    args = ckpt['hyper_parameters']
-    args = OmegaConf.create(args)
-    #with open_dict(args):
-    args.checkpoint = checkpoint
-    args.resume_training = True
-    if not 'wandb_id' in args or not args.wandb_id:
-      args.wandb_id = wandb_id
-    # Run prepend again in case we move to another server and need to redo the paths
-    args = re_prepend_paths(args)
+  #args = prepend_paths(args)
+  #time.sleep(random.randint(1,5)) # Prevents multiple runs getting the same version when launching many jobs at once
   
-  if args.generate_embeddings:
-    if not args.datatype:
-      args.datatype = grab_arg_from_checkpoint(args, 'dataset')
-    generate_embeddings(args)
-    return args
+  args.wandb_run_name = 'hager-pretrain_as_tom' #TODO 
+  #args.wandb_run_name = 'hager-eval_as_tom'
   
   base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
   if args.use_wandb:
-    if args.resume_training and args.wandb_id:
-      wandb_logger = WandbLogger(project=args.wandb_project, entity=args.wandb_entity, save_dir=base_dir, offline=args.offline, id=args.wandb_id, resume='must')
-    else:
-      wandb_logger = WandbLogger(project=args.wandb_project, entity=args.wandb_entity, save_dir=base_dir, offline=args.offline)
+    wandb_logger = WandbLogger(project=args.wandb_project, entity=args.wandb_entity, name=args.wandb_run_name, save_dir=base_dir, offline=args.offline)
   else:
-    wandb_logger = WandbLogger(project='Test', entity='', save_dir=base_dir, offline=args.offline)
+    wandb_logger = WandbLogger(project='multimodal_as', entity='andreafung6', name=args.wandb_run_name, save_dir=base_dir, offline=args.offline)
   args.wandb_id = wandb_logger.version
 
-  if args.checkpoint and not args.resume_training:
-    if not args.datatype:
-      args.datatype = grab_arg_from_checkpoint(args, 'datatype')
+  # if args.checkpoint and not args.resume_training:
+  #   if not args.datatype:
+  #     args.datatype = grab_arg_from_checkpoint(args, 'datatype')
       
   if args.pretrain:
-    pretrain(args, wandb_logger)
-    args.checkpoint = os.path.join(base_dir, 'runs', args.datatype, wandb_logger.experiment.name, f'checkpoint_last_epoch_{args.max_epochs-1:02}.ckpt')
+    pretrain(args, wandb_logger) 
+    args.checkpoint = os.path.join(base_dir, 'runs', args.datatype, args.wandb_run_name, f'checkpoint_last_epoch_{args.max_epochs-1:02}.ckpt')
   
-  if args.test:
-    test(args, wandb_logger)
-  elif args.evaluate:
-    evaluate(args, wandb_logger)
+  if args.test_private:
+    test_private(args, wandb_logger)
+  elif args.evaluate_private:
+    evaluate_private_dataset(args, wandb_logger)
+
+  if args.test_tufts:
+    test_tufts(args, wandb_logger)
+  elif args.evaluate_tufts:
+    evaluate_tufts_dataset(args, wandb_logger)
 
   wandb.finish()
   del wandb_logger

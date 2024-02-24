@@ -7,9 +7,8 @@ from torch import nn
 import torch
 from torchvision import transforms
 
-def create_logdir(name: str, resume_training: bool, wandb_logger):
+def create_logdir(name: str, resume_training: bool, run_name):
   basepath = join(os.path.dirname(os.path.abspath(sys.argv[0])),'runs', name)
-  run_name = wandb_logger.experiment.name
   logdir = join(basepath,run_name)
   if os.path.exists(logdir) and not resume_training:
     raise Exception(f'Run {run_name} already exists. Please delete the folder {logdir} or choose a different run name.')

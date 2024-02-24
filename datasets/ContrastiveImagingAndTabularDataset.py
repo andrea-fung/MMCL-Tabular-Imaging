@@ -6,9 +6,12 @@ import copy
 import torch
 from torch.utils.data import Dataset
 import pandas as pd
+import numpy as np
 from torchvision.transforms import transforms
 from torchvision.io import read_image
-
+from scipy.io import loadmat
+from random import lognormvariate, randint
+from skimage.transform import resize
 
 class ContrastiveImagingAndTabularDataset(Dataset):
   """
@@ -20,20 +23,23 @@ class ContrastiveImagingAndTabularDataset(Dataset):
   """
   def __init__(
       self, 
-      data_path_imaging: str, delete_segmentation: bool, augmentation: transforms.Compose, augmentation_rate: float, 
-      data_path_tabular: str, corruption_rate: float, field_lengths_tabular: str, one_hot_tabular: bool,
-      labels_path: str, img_size: int, live_loading: bool) -> None:
+      imaging_dataframe, augmentation: transforms.Compose, augmentation_rate: float, 
+      tabular_dataframe, corruption_rate: float, one_hot_tabular: bool, #field_lengths_tabular: str, labels_path: str, live_loading: bool, 
+      img_size: int, label_scheme, hr_mean: float = 4.237, 
+      hr_std: float = 0.1885) -> None:
             
     # Imaging
-    self.data_imaging = torch.load(data_path_imaging)
+    self.data_imaging = imaging_dataframe
     self.transform = augmentation
-    self.delete_segmentation = delete_segmentation
     self.augmentation_rate = augmentation_rate
-    self.live_loading = live_loading
+    #self.live_loading = live_loading
+    self.hr_mean = hr_mean
+    self.hr_srd = hr_std
+    self.img_size = img_size
 
-    if self.delete_segmentation:
-      for im in self.data_imaging:
-        im[0,:,:] = 0
+    # if self.delete_segmentation:
+    #   for im in self.data_imaging:
+    #     im[0,:,:] = 0
 
     self.default_transform = transforms.Compose([
       transforms.Resize(size=(img_size,img_size)),
@@ -41,43 +47,32 @@ class ContrastiveImagingAndTabularDataset(Dataset):
     ])
 
     # Tabular
-    self.data_tabular = self.read_and_parse_csv(data_path_tabular)
-    self.generate_marginal_distributions(data_path_tabular)
+    self.data_tabular = tabular_dataframe
+    self.generate_marginal_distributions(tabular_dataframe)
     self.c = corruption_rate
-    self.field_lengths_tabular = torch.load(field_lengths_tabular)
+    #self.field_lengths_tabular = torch.load(field_lengths_tabular)
     self.one_hot_tabular = one_hot_tabular
     
     # Classifier
-    self.labels = torch.load(labels_path)
-  
-  def read_and_parse_csv(self, path_tabular: str) -> List[List[float]]:
-    """
-    Does what it says on the box.
-    """
-    with open(path_tabular,'r') as f:
-      reader = csv.reader(f)
-      data = []
-      for r in reader:
-        r2 = [float(r1) for r1 in r]
-        data.append(r2)
-    return data
+    #self.labels = torch.load(labels_path)
+    self.scheme = label_scheme
 
-  def generate_marginal_distributions(self, data_path: str) -> None:
+  def generate_marginal_distributions(self, data) -> None:
     """
     Generates empirical marginal distribution by transposing data
     """
-    data_df = pd.read_csv(data_path)
-    self.marginal_distributions = data_df.transpose().values.tolist()
+    self.marginal_distributions = data.transpose().values.tolist()
 
   def get_input_size(self) -> int:
     """
     Returns the number of fields in the table. 
     Used to set the input number of nodes in the MLP
     """
-    if self.one_hot_tabular:
-      return int(sum(self.field_lengths_tabular))
-    else:
-      return len(self.data[0])
+    # if self.one_hot_tabular:
+    #   return int(sum(self.field_lengths_tabular))
+    # else:
+    #   return len(self.data[0])
+    return len(self.data_tabular.iloc[0])
 
   def corrupt(self, subject: List[float]) -> List[float]:
     """
@@ -104,15 +99,33 @@ class ContrastiveImagingAndTabularDataset(Dataset):
         out.append(torch.nn.functional.one_hot(subject[i].long(), num_classes=int(self.field_lengths_tabular[i])))
     return torch.cat(out)
 
-  def generate_imaging_views(self, index: int) -> List[torch.Tensor]:
+  def mat_loader(self, path):
+    mat = loadmat(path)
+    if 'cine' in mat.keys():    
+        return loadmat(path)['cine']
+    if 'cropped' in mat.keys():    
+        return loadmat(path)['cropped']
+
+  @staticmethod
+  def get_random_interval(vid, length):
+        length = int(length)
+        start = randint(0, max(0, len(vid) - length))
+        return vid[start:start + length]
+  
+  @staticmethod
+  def gray_to_gray3(in_tensor):
+        # in_tensor is 1xTxHxW
+        return in_tensor.expand(-1, 3, -1, -1)
+
+  def generate_imaging_views(self, im) -> List[torch.Tensor]:
     """
     Generates two views of a subjects image. Also returns original image resized to required dimensions.
     The first is always augmented. The second has {augmentation_rate} chance to be augmented.
     """
-    im = self.data_imaging[index]
-    if self.live_loading:
-      im = read_image(im)
-      im = im / 255
+    
+    # if self.live_loading:
+    #   im = read_image(im)
+    #   im = im / 255
     ims = [self.transform(im)]
     if random.random() < self.augmentation_rate:
       ims.append(self.transform(im))
@@ -120,16 +133,32 @@ class ContrastiveImagingAndTabularDataset(Dataset):
       ims.append(self.default_transform(im))
 
     orig_im = self.default_transform(im)
-    
     return ims, orig_im
 
   def __getitem__(self, index: int) -> Tuple[List[torch.Tensor], List[torch.Tensor], torch.Tensor, torch.Tensor]:
-    imaging_views, unaugmented_image = self.generate_imaging_views(index)
-    tabular_views = [torch.tensor(self.data_tabular[index], dtype=torch.float), torch.tensor(self.corrupt(self.data_tabular[index]), dtype=torch.float)]
+    data_info = self.data_imaging.iloc[index]
+    study_num = data_info['Echo ID#']
+    labels_AS = torch.tensor(self.scheme[data_info['as_label']])
+
+    cine_original = self.mat_loader(data_info['path'])
+    window_length = 60000 / (lognormvariate(self.hr_mean, self.hr_srd) * data_info['frame_time'])
+    cine = self.get_random_interval(cine_original, window_length)
+    frame_choice = np.random.randint(0, cine.shape[0], 1)
+    cine = cine[frame_choice, :, :]
+    cine = resize(cine, (1, self.img_size, self.img_size)) 
+
+    cine = torch.tensor(cine).unsqueeze(1) #[f, c, h, w]
+    cine = self.gray_to_gray3(cine)
+    cine = cine.squeeze(0) #[c, h, w]
+    cine = cine.float()
+
+    imaging_views, unaugmented_image = self.generate_imaging_views(im=cine)
+    tabular_views = [torch.tensor(self.data_tabular.loc[int(study_num)], dtype=torch.float), torch.tensor(self.corrupt(self.data_tabular.loc[int(study_num)]), dtype=torch.float)]
     if self.one_hot_tabular:
       tabular_views = [self.one_hot_encode(tv) for tv in tabular_views]
-    label = torch.tensor(self.labels[index], dtype=torch.long)
-    return imaging_views, tabular_views, label, unaugmented_image
+    
+    #return imaging_views, tabular_views, label, unaugmented_image
+    return imaging_views, tabular_views, labels_AS, unaugmented_image
 
   def __len__(self) -> int:
-    return len(self.data_tabular)
+    return len(self.data_imaging)

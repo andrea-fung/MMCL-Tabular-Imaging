@@ -32,24 +32,10 @@ class MultimodalSimCLR(Pretraining):
     # Multimodal
     nclasses = hparams.batch_size
     self.criterion_val = CLIPLoss(temperature=self.hparams.temperature, lambda_0=self.hparams.lambda_0)
-    if self.hparams.loss.lower() == 'remove_fn':
-      self.criterion_train = RemoveFNLoss(temperature=self.hparams.temperature, lambda_0=self.hparams.lambda_0)
-    elif self.hparams.loss.lower() == 'binary_remove_fn':
-      self.criterion_train = BinaryRemoveFNLoss(temperature=self.hparams.temperature, lambda_0=self.hparams.lambda_0)
-    elif self.hparams.loss.lower() == 'supcon':
-      self.criterion_train = SupConLossCLIP(temperature=self.hparams.temperature, lambda_0=self.hparams.lambda_0)
-    elif self.hparams.loss.lower() == 'binary_supcon':
-      self.criterion_train = BinarySupConCLIPLoss(temperature=self.hparams.temperature, lambda_0=self.hparams.lambda_0)
-    elif self.hparams.loss.lower() == 'kpositive':
-      self.criterion_train = KPositiveLossCLIP(temperature=self.hparams.temperature, k=6, cosine_similarity_matrix_path=self.hparams.train_similarity_matrix, threshold=self.hparams.threshold)
-    elif self.hparams.loss.lower() == 'clip':
+    if self.hparams.loss.lower() == 'clip':
       self.criterion_train = self.criterion_val
-    elif self.hparams.loss.lower() == 'ntxent':
-      self.criterion_train = NTXentLoss(self.hparams.temperature)
-      self.criterion_val = self.criterion_train
-      nclasses = hparams.batch_size*2-1
     else:
-      raise ValueError('The only implemented losses currently are CLIP, NTXent, supcon, and remove_fn')
+      raise ValueError('The only implemented losses currently are CLIP')
 
     self.initialize_classifier_and_metrics(nclasses, nclasses)
 
